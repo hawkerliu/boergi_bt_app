@@ -7,8 +7,30 @@
 
 #include <QQmlContext>
 
+/* to do:
+ *
+ * evtl daten mit qml timer abholen statt signale
+ * zuvor neuen buffer mit daten füllen
+ *
+ * differenz und offset für chart:
+ * werte in cpp berechnen und innerhalb der klasse updaten,
+ * dann mit qproperty übergeben bei änderung (cppInterface.myParam)
+ *
+ * Destructor aus Interface Klasse aufrufen (pointer zum btmanager)
+ *
+ *
+ *
+ */
+
 int main(int argc, char *argv[])
 {
+    // *****************************
+    // to do:
+    // - calcYborders()
+    //
+    // *****************************
+
+
     QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
     //QGuiApplication app(argc, argv);
     QApplication app(argc,argv);

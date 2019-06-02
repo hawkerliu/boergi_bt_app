@@ -2,5 +2,4 @@
 
 ThreadQmlInterface::ThreadQmlInterface(QObject *parent) : QObject(parent)
 {
-
 }

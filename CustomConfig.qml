@@ -8,27 +8,61 @@ import QtQuick.Dialogs 1.2
 
 Dialog {
     id: confDialog
-    visible: true
+    visible: false
     title: "Custom sensor configuration"
     width: prsMRtext.width + prsMR.width// + 50
     //width: root.width/4
     //height: root.height/2
-    standardButtons: Dialog.Ok | Dialog.Cancel | Dialog.Reset
+    standardButtons: Dialog.Ok | Dialog.Cancel
 
-    signal testSignal() // ********************************************************************
+    property alias prs_mr: prsMRslider.value
+    property alias prs_osr: prsOSRslider.value
+    property alias temp_mr: tmpMRslider.value
+    property alias temp_osr: tmpOSRslider.value
+
+    property int prs_mr_prev
+    property int prs_osr_prev
+    property int temp_mr_prev
+    property int temp_osr_prev
+
+    onRejected: {
+        prs_mr = prs_mr_prev
+        prs_osr = prs_osr_prev
+        temp_mr = temp_mr_prev
+        temp_osr = temp_osr_prev
+    }
+
+    onVisibleChanged: {
+        if (visible==true)
+        {
+            prs_mr_prev = prs_mr
+            prs_osr_prev = prs_osr
+            temp_mr_prev = temp_mr
+            temp_osr_prev = temp_osr
+        }
+    }
 
     onAccepted: {
-        console.log("Ok clicked")
-        confActions.checkedAction.checked = false
-        console.log("Apply settings to setMode() here!")
-    }
-    onRejected: {
-        console.log("Cancel clicked")
-        confDialog.testSignal() // ****************************************************************
-    }
-    onReset: {
-        console.log("Reset clicked")
-        console.log("Reset settings to standard here!")
+        if (confActions.checkedAction)
+            confActions.checkedAction.checked = false
+
+        if (cppInterface.prs_mr != prs_mr)
+            cppInterface.prs_mr = prs_mr
+        if (cppInterface.prs_osr != prs_osr)
+            cppInterface.prs_osr = prs_osr
+        if (cppInterface.temp_mr != temp_mr)
+            cppInterface.temp_mr = temp_mr
+        if (cppInterface.temp_osr != temp_osr)
+            cppInterface.temp_osr = temp_osr
+        cppInterface.modeState = state_REQUESTED
+
+        // set modes to checked if slider values are the same
+        if (prs_mr == 32 && prs_osr == 1 && temp_mr == 32 && temp_osr == 1)
+            hdr.checked = true
+        if (prs_mr == 8 && prs_osr == 32 && temp_mr == 8 && temp_osr == 32)
+            std.checked = true
+        if (prs_mr == 1 && prs_osr == 128 && temp_mr == 1 && temp_osr == 128)
+            hpr.checked = true
     }
 
     // PRS MR
@@ -37,6 +71,7 @@ Dialog {
         text: qsTr("Pressure Measurement Rate:  ")
         font.pixelSize: 20
         anchors.top: parent.top
+
     }
     Text {
         id: prsMR
@@ -48,8 +83,8 @@ Dialog {
         font.bold: true
     }
     ConfigSlider {
-    id: prsMRslider
-    anchors.top: prsMR.bottom
+        id: prsMRslider
+        anchors.top: prsMR.bottom
     }
 
     // PRS OSR
@@ -70,8 +105,8 @@ Dialog {
         font.bold: true
     }
     ConfigSlider {
-    id: prsOSRslider
-    anchors.top: prsOSR.bottom
+        id: prsOSRslider
+        anchors.top: prsOSR.bottom
     }
 
     // TMP MR
@@ -92,14 +127,14 @@ Dialog {
         font.bold: true
     }
     ConfigSlider {
-    id: tmpMRslider
-    anchors.top: tmpMR.bottom
+        id: tmpMRslider
+        anchors.top: tmpMR.bottom
     }
 
     // TMP OSR
     Text {
         id: tmpOSRtext
-        text: qsTr("Temperature Measurement Rate:  ")
+        text: qsTr("Temperature Oversampling Rate:  ")
         font.pixelSize: 20
         anchors.top: tmpMRslider.bottom
     }
@@ -114,9 +149,11 @@ Dialog {
         font.bold: true
     }
     ConfigSlider {
-    id: tmpOSRslider
-    anchors.top: tmpOSR.bottom
+        id: tmpOSRslider
+        anchors.top: tmpOSR.bottom
     }
+
+
 
 
 

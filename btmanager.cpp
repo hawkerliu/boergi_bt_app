@@ -14,6 +14,9 @@ BtManager::BtManager(QObject *parent, ThreadQmlInterface* tqiRef) : QObject(pare
 {
     qDebug()<<"BtManager started";
     Q_UNUSED(parent);
+    sendTimer = new QTimer();
+    sendTimer->setInterval(500);
+    sendTimer->setSingleShot(true);
 
     qDebug("Saying Hello through to Interface to QML");
     m_refToInterface->setRefToBtManager(this); // now the interface also hast a pointer to this instance!
@@ -22,6 +25,10 @@ BtManager::BtManager(QObject *parent, ThreadQmlInterface* tqiRef) : QObject(pare
     m_refToInterface->addOneToSomeBuffer("Diese"); // just adding some to someBuffer to pick it out in Qml
     m_refToInterface->addOneToSomeBuffer("Und Diese"); // just adding some to someBuffer to pick it out in Qml
     m_refToInterface->addOneToSomeBuffer("Und jene"); // just adding some to someBuffer to pick it out in Qml
+
+    // **********************************************************
+    // m_refToInterface->getAllFromSomeBuffer();
+    // **********************************************************
 
 
 
@@ -65,7 +72,7 @@ BtManager::BtManager(QObject *parent, ThreadQmlInterface* tqiRef) : QObject(pare
             //        adapter.setHostMode(QBluetoothLocalDevice::HostDiscoverable);
         }
     }
-    else qDebug()<<"Error: invalid bluetooth adapter";
+    else qDebug()<<"Error: no bluetooth adapters found";
 
 
 
@@ -77,16 +84,22 @@ BtManager::BtManager(QObject *parent, ThreadQmlInterface* tqiRef) : QObject(pare
     modeTimer = new QTimer(this);
 
     // Connect DeviceDiscoveryAgent
-
     connect(mDeviceDiscoveryAgent, SIGNAL(deviceDiscovered(const QBluetoothDeviceInfo&)),
             this, SLOT(onDeviceDiscovered(const QBluetoothDeviceInfo&)));
 
     connect(mDeviceDiscoveryAgent, SIGNAL(error(QBluetoothDeviceDiscoveryAgent::Error)),
             this, SLOT(onDeviceScanError(QBluetoothDeviceDiscoveryAgent::Error)));
     connect(mDeviceDiscoveryAgent, SIGNAL(finished()), this, SLOT(onDeviceScanFinished()));
-    // Connect LocalDevice
-    connect(mLocalDevice, SIGNAL(hostModeStateChanged(QBluetoothLocalDevice::HostMode)),
-            this, SLOT(onHostModeStateChanged(QBluetoothLocalDevice::HostMode)));
+    // qml
+    connect(m_refToInterface, SIGNAL(scanDevicesInterface()), this, SLOT(startDiscovery()));
+
+    connect(this, SIGNAL(deviceFound(QString,QString)),m_refToInterface, SLOT(addDeviceToList(QString,QString)));
+            //connect(this, SIGNAL(deviceFound(QBluetoothDeviceInfo)), m_refToInterface, SLOT(addDeviceToList(QBluetoothDeviceInfo)) );
+
+            //connect(this, SIGNAL(deviceFound(QBluetoothDeviceInfo&)), m_refToInterface, SLOT(addDeviceToList(QBluetoothDeviceInfo&)));
+            // Connect LocalDevice
+            connect(mLocalDevice, SIGNAL(hostModeStateChanged(QBluetoothLocalDevice::HostMode)),
+                    this, SLOT(onHostModeStateChanged(QBluetoothLocalDevice::HostMode)));
     connect(mLocalDevice, SIGNAL(error(QBluetoothLocalDevice::Error)),
             this, SLOT(onLocalDeviceError(QBluetoothLocalDevice::Error)));
     connect(mLocalDevice, SIGNAL(pairingFinished(QBluetoothAddress,QBluetoothLocalDevice::Pairing)),
@@ -104,132 +117,171 @@ BtManager::BtManager(QObject *parent, ThreadQmlInterface* tqiRef) : QObject(pare
     connect(mSocket, SIGNAL(stateChanged(QBluetoothSocket::SocketState)),
             this, SLOT(onSocketStateChanged(QBluetoothSocket::SocketState)));
     connect(mSocket, SIGNAL(bytesWritten(qint64)), this, SLOT(socketWritten(qint64)));
-    // Connect timer
-    connect(modeTimer, SIGNAL(timeout()), this, SLOT(onModeTimeout()));
+    // qml
+    connect(m_refToInterface, SIGNAL(modeStateChanged()), this, SLOT(mainStateChanged()));
 
-    // Start discovery
-    mDeviceDiscoveryAgent->stop();
-    qDebug()<<"Device discovery started";
-    //onHostModeStateChanged(mLocalDevice->hostMode());
-    mDeviceDiscoveryAgent->start(QBluetoothDeviceDiscoveryAgent::ClassicMethod); //ClassicMethod LowEnergyMethod NoMethod
+    // Connect send machine: ack, nack, timer
+    connect(this, SIGNAL(acknowledged()),this, SLOT(modeACK()));
+    connect(this, SIGNAL(notAcknowledged()),this, SLOT(modeNACK()));
+    connect(sendTimer, SIGNAL(timeout()), this, SLOT(sendTimerExpired()));
 
+
+    //this->startDiscovery();
 }
 
 
 
 BtManager::~BtManager()
 {
-    QString sID = "1"; // sensor id
-    qDebug()<<"EXITING: changing to Standard Precision.";
     this->sendMessage(STOP);
     mSocket->waitForBytesWritten(-1);
-    this->setMode(sID, "mode", "bg");
-    this->setMode(sID, "prs_mr", "8");
-    this->setMode(sID, "prs_osr", "32");
-    this->setMode(sID, "temp_mr", "8");
-    this->setMode(sID, "temp_osr", "32");
+    mSocket->waitForReadyRead(-1);
+    //    this->setMode(sID, "mode", "bg");
+    //    this->setMode(sID, "prs_mr", "8");
+    //    this->setMode(sID, "prs_osr", "32");
+    //    this->setMode(sID, "temp_mr", "8");
+    //    this->setMode(sID, "temp_osr", "32");
 
-    //mSocket->connectToService(mDeviceInfo.address(),QBluetoothUuid::SerialPort, QIODevice::ReadWrite);
     mSocket->disconnectFromService();
+    //QThread::sleep(1);
     qDebug()<<"Disconnected.";
-    QThread::sleep(2);
 
 
-//    this->sendMessage(STOP);
-//    mSocket->waitForBytesWritten(-1);
-//    qDebug()<<"stop message sent";
-    delete mDeviceDiscoveryAgent;
-    delete mLocalDevice;
-    delete mServiceInfo;
-    delete mSocket;
+    //deleteLater();
+
+    //    delete mDeviceDiscoveryAgent;
+    //    delete mLocalDevice;
+    //    delete mServiceInfo;
+    //    delete mSocket;
     qDebug()<<"You have been terminated.";
 }
 
-QString BtManager::sayHello() const
+void BtManager::mainStateChanged()
 {
-    return "Hello!";
+    switch (m_refToInterface->m_modeState) {
+    case STATE_INIT:
+        qDebug()<<"MAIN_STATE: INIT";
+        this->start(); // connect, read current config
+        break;
+    case STATE_UPDATED:
+        qDebug()<<"MAIN_STATE: UPDATED";
+
+        // prev values really neccessary? maybe restore values on error
+        m_refToInterface->m_prev_prs_mr = m_refToInterface->m_prs_mr;
+        m_refToInterface->m_prev_prs_osr = m_refToInterface->m_prs_osr;
+        m_refToInterface->m_prev_temp_mr = m_refToInterface->m_temp_mr;
+        m_refToInterface->m_prev_temp_osr = m_refToInterface->m_temp_osr;
+
+        // set mode states
+        m_refToInterface->modeStates[PRS_MR] = UPDATED;
+        m_refToInterface->modeStates[PRS_OSR] = UPDATED;
+        m_refToInterface->modeStates[TEMP_MR] = UPDATED;
+        m_refToInterface->modeStates[TEMP_OSR] = UPDATED;
+
+        // reset state list
+        for (int i=0;i<m_refToInterface->m_stateList.length();i++)
+        {
+            m_refToInterface->m_stateList[i] = false;
+        }
+
+        m_refToInterface->resetBorders();
+
+        //        m_refToInterface->maxP = 0;
+        //        m_refToInterface->minP = 0;
+        //        m_refToInterface->maxT = 0;
+        //        m_refToInterface->minT = 0;
+        //        m_refToInterface->maxA = 0;
+        //        m_refToInterface->minA = 0;
+        //        m_refToInterface->maxV = 0;
+        //        m_refToInterface->minV = 0;
+
+        //        m_refToInterface->firstRunP = true;
+        //        m_refToInterface->firstRunT = true;
+        //        m_refToInterface->firstRunA = true;
+        //        m_refToInterface->firstRunV = true;
+
+
+        break;
+    case STATE_REQUESTED:
+        qDebug()<<"MAIN_STATE: REQUESTED";
+        sendMachine();
+        // passt -
+
+        break;
+
+    case STATE_FAILED:
+        qDebug()<<"MAIN_STATE: FAILED";
+        // ***********************************
+        // read modes from device instead of setting previous values
+        qDebug()<<"Reading modes failed or timeout occured. Reading current sensor config...";
+        for (int i=0; i<m_refToInterface->m_stateList.length();i++)
+        {
+            m_refToInterface->m_stateList[i] = false;
+        }
+        getMode(PRSMR);
+        getMode(PRSOSR);
+        getMode(TEMPMR);
+        getMode(TEMPOSR);
+        break;
+
+    default:
+        qDebug()<<"MAIN_STATE: default state";
+        break;
+
+    }
 }
 
-void BtManager::onModeTimeout()
-{
-    QString sID = "1"; // sensor id
-    if (modeCounter > 3) modeCounter = 0;
-    switch (modeCounter) {
-    case 0:     // High Data Rate
-        qDebug()<<"Changing to High Data Rate.";
-        this->sendMessage(STOP);
-        mSocket->waitForBytesWritten(-1);
-        this->setMode(sID, "mode", "bg");
-        this->setMode(sID, "prs_mr", "32");
-        this->setMode(sID, "prs_osr", "1");
-        this->setMode(sID, "temp_mr", "32");
-        this->setMode(sID, "temp_osr", "1");
-        this->sendMessage(START);
-        mSocket->waitForBytesWritten(-1);
-        modeCounter++;//=1; // to std rate
-        break;
-    case 1:     // Standard Precision
-        qDebug()<<"Changing to Standard Precision:";
-        this->sendMessage(STOP);
-        mSocket->waitForBytesWritten(-1);
-        this->setMode(sID, "mode", "bg");
-        this->setMode(sID, "prs_mr", "8");
-        this->setMode(sID, "prs_osr", "32");
-        this->setMode(sID, "temp_mr", "8");
-        this->setMode(sID, "temp_osr", "32");
-        this->sendMessage(START);
-        mSocket->waitForBytesWritten(-1);
-        modeCounter++;
-        break;
-    case 2:     // High Precision
-        qDebug()<<"Changed to High Precision";
-        this->sendMessage(STOP);
-        mSocket->waitForBytesWritten(-1);
-        this->setMode(sID, "mode", "bg");
-        this->setMode(sID, "prs_mr", "1");
-        this->setMode(sID, "prs_osr", "128");
-        this->setMode(sID, "temp_mr", "1");
-        this->setMode(sID, "temp_osr", "128");
-        this->sendMessage(START);
-        mSocket->waitForBytesWritten(-1);
-        modeCounter++;
-        break;
-    case 3:     // Standard Precision
-        qDebug()<<"Changing to Standard Precision:";
-        this->sendMessage(STOP);
-        mSocket->waitForBytesWritten(-1);
-        this->setMode(sID, "mode", "bg");
-        this->setMode(sID, "prs_mr", "8");
-        this->setMode(sID, "prs_osr", "32");
-        this->setMode(sID, "temp_mr", "8");
-        this->setMode(sID, "temp_osr", "32");
-        this->sendMessage(START);
-        mSocket->waitForBytesWritten(-1);
-        modeCounter++;
-        break;
-    default:
-        qDebug()<<"onModeTimeout error";
-        break;
-    }
 
-    //    Mode message sent: "$set_mode sid=1;md=mode;val=bg\n"
-    //    Mode message sent: "$set_mode sid=1;md=prs_mr;val=32\n"
-    //    Mode message sent: "$set_mode sid=1;md=prs_osr;val=1\n"
-    //    Mode message sent: "$set_mode sid=1;md=temp_mr;val=32\n"
-    //    Mode message sent: "$set_mode sid=1;md=temp_osr;val=1\n"
-    //      Changed to High Data Rate
-    //    Mode message sent: "$set_mode sid=1;md=mode;val=bg\n"
-    //    Mode message sent: "$set_mode sid=1;md=prs_mr;val=8\n"
-    //    Mode message sent: "$set_mode sid=1;md=prs_osr;val=32\n"
-    //    Mode message sent: "$set_mode sid=1;md=temp_mr;val=8\n"
-    //    Mode message sent: "$set_mode sid=1;md=temp_osr;val=32\n"
-    //      Changed to Standard Precision
-    //    Mode message sent: "$set_mode sid=1;md=mode;val=bg\n"
-    //    Mode message sent: "$set_mode sid=1;md=prs_mr;val=1\n"
-    //    Mode message sent: "$set_mode sid=1;md=prs_osr;val=128\n"
-    //    Mode message sent: "$set_mode sid=1;md=temp_mr;val=1\n"
-    //    Mode message sent: "$set_mode sid=1;md=temp_osr;val=128\n"
-    //      Changed to High Precision
+void BtManager::calcYborders(double &minY, double &maxY, double &value, bool &first, const QString &id)
+{
+    double axisDiff;
+    double axisOffs = 0.1;
+    axisDiff = maxY - minY;
+    if (first) {
+        maxY = value + (axisDiff*axisOffs);
+        minY = value - (axisDiff*axisOffs);
+        maxY += 0.001;
+        minY -= 0.001;
+        //qDebug()<<id<<"Initial MAX:"<<maxY<<"MIN:"<<minY;
+        first = false; // if reset is implemented, this has to be changed to true again
+        if (id == id_temp) {
+            emit m_refToInterface->maxOfTempChanged();
+            emit m_refToInterface->minOfTempChanged();
+        }
+        else if (id == id_pres) {
+            emit m_refToInterface->maxOfPresChanged();
+            emit m_refToInterface->minOfPresChanged();
+        }
+        else if (id == id_altitude) {
+
+            emit m_refToInterface->maxOfAltChanged();
+            emit m_refToInterface->minOfAltChanged();
+        }
+        else if (id == id_volume) {
+            emit m_refToInterface->maxOfVolChanged();
+            emit m_refToInterface->minOfVolChanged();
+        }
+    }
+    else {
+        if (value > maxY)
+        {
+            //qDebug()<<id<<"NEW MAX:"<<value;
+            maxY = value + (axisDiff*axisOffs);
+            if (id == id_temp) emit m_refToInterface->maxOfTempChanged();
+            else if (id == id_pres)  emit m_refToInterface->maxOfPresChanged();
+            else if (id == id_altitude) emit m_refToInterface->maxOfAltChanged();
+            else if (id == id_volume) emit m_refToInterface->maxOfVolChanged();
+        }
+        if (value <= minY)
+        {
+            //qDebug()<<id<<"NEW MIN:"<<value;
+            minY = value - (axisDiff*axisOffs);
+            if (id == id_temp) emit m_refToInterface->minOfTempChanged();
+            else if (id == id_pres)  emit m_refToInterface->minOfPresChanged();
+            else if (id == id_altitude) emit m_refToInterface->minOfAltChanged();
+            else if (id == id_volume) emit m_refToInterface->minOfVolChanged();
+        }
+    }
 }
 
 void BtManager::socketReadLine()
@@ -239,11 +291,13 @@ void BtManager::socketReadLine()
     double f;
     QString element;
     int pos = 3; // position of measurement id
+
     // Read data from buffer as long as there are packages
     while (mSocket->canReadLine()) {
         QByteArray byteBuffer = mSocket->readLine();
         mBufferList.append(QString::fromStdString(byteBuffer.toStdString()));
     }
+    //qDebug()<<"READ_BUFFER:"<<mBufferList;
     // Sort out data and send signal to QML
     if (!mBufferList.empty())
     {
@@ -252,45 +306,302 @@ void BtManager::socketReadLine()
             element = mBufferList.at(i);
             if (element.at(pos)==id_temp)
             {
-                val = element.section(",",2,2).toDouble();
-                time = element.section(",",3,3).toDouble();
+                val = element.section(',',2,2).toDouble();
+                time = element.section(',',3,3).toDouble();
                 time = time/10000; // convert to seconds
-                emit updateTemperature(QPointF(time,val));
-
+                m_refToInterface->updateTemperature(QPointF(time,val));
+                calcYborders(m_refToInterface->minT,m_refToInterface->maxT,val,m_refToInterface->firstRunT,id_temp);
                 f = 1/(static_cast<double>(time-prevTime)); // time val: 1250 = 125ms period time
                 if (f < 0) f = 0;
                 prevTime = time;
-                emit updateFrequency(f);
+                m_refToInterface->updateFrequency(f);
             }
             else if (element.at(pos)==id_pres)
             {
-                val = element.section(",",2,2).toDouble();
-                time = element.section(",",3,3).toDouble();
+                val = element.section(',',2,2).toDouble();
+                time = element.section(',',3,3).toDouble();
                 time = time/10000; // convert to seconds
-                // MODIFIED to conform with the interface
                 m_refToInterface->updatePressure(QPointF(time,val));
+                calcYborders(m_refToInterface->minP,m_refToInterface->maxP,val,m_refToInterface->firstRunP,id_pres);
             }
             else if (element.at(pos)==id_altitude)
             {
-                val = element.section(",",2,2).toDouble();
-                time = element.section(",",3,3).toDouble();
+                val = element.section(',',2,2).toDouble();
+                time = element.section(',',3,3).toDouble();
                 time = time/10000; // convert to seconds
-                emit updateAltitude(QPointF(time,val));
+                m_refToInterface->updateAltitude(QPointF(time,val));
+                calcYborders(m_refToInterface->minA,m_refToInterface->maxA,val,m_refToInterface->firstRunA,id_altitude);
             }
             else if (element.at(pos)==id_volume)
             {
-                val = element.section(",",2,2).toDouble();
-                time = element.section(",",3,3).toDouble();
+                val = element.section(',',2,2).toDouble();
+                time = element.section(',',3,3).toDouble();
                 time = time/10000; // convert to seconds
-                emit updateVolume(QPointF(time,val));
+                m_refToInterface->updateVolume(QPointF(time,val));
+                calcYborders(m_refToInterface->minV,m_refToInterface->maxV,val,m_refToInterface->firstRunV,id_volume);
+                //qDebug()<<"V max is"<<maxV<<"V min is"<<minV;
             }
-            else qDebug()<<"Unknown element in data:"<<element;
+            else if (element.contains("nack"))
+            {
+                qDebug()<<"SOCKET_READ: Not acknowledged from device";
+                emit notAcknowledged();
+            }
+            else if (element.contains("ack"))
+            {
+                qDebug()<<"SOCKET_READ: Acknowledged from device";
+                emit acknowledged();
+            }
+
+            //else if (m_refToInterface->m_modeState == (STATE_INIT | STATE_FAILED) && element.contains("prs_mr"))
+            else if (element.contains("prs_mr"))
+            {
+                //qDebug()<<"debug: element qstringlist"<<element.split('');
+                m_refToInterface->m_prs_mr = static_cast<int>(element.section('\"',11,11).toDouble());
+
+                qDebug()<<"SOCKET_READ: prs_mr:"<<m_refToInterface->m_prs_mr;
+                m_refToInterface->m_stateList[PRS_MR] = true;
+                if (m_refToInterface->m_stateList.indexOf(false) == -1)
+                {
+                    m_refToInterface->m_modeState = STATE_UPDATED;
+                    emit m_refToInterface->modeStateChanged();
+                }
+
+            }
+            //else if (m_refToInterface->m_modeState == (STATE_INIT | STATE_FAILED) && element.contains("prs_osr"))
+            else if (element.contains("prs_osr"))
+            {
+                m_refToInterface->m_prs_osr = static_cast<int>(element.section('\"',11,11).toDouble());
+                qDebug()<<"SOCKET_READ: prs_osr:"<<m_refToInterface->m_prs_osr;
+
+                m_refToInterface->m_stateList[PRS_OSR] = true;
+                if (m_refToInterface->m_stateList.indexOf(false) == -1)
+                {
+                    m_refToInterface->m_modeState = STATE_UPDATED;
+                    emit m_refToInterface->modeStateChanged();
+                }
+            }
+            //            else if (m_refToInterface->m_modeState == (STATE_INIT | STATE_FAILED) && element.contains("temp_mr"))
+            else if (element.contains("temp_mr"))
+            {
+                m_refToInterface->m_temp_mr = static_cast<int>(element.section('\"',11,11).toDouble());
+                qDebug()<<"SOCKET_READ: temp_mr:"<<m_refToInterface->m_temp_mr;
+
+                m_refToInterface->m_stateList[TEMP_MR] = true;
+                if (m_refToInterface->m_stateList.indexOf(false) == -1)
+                {
+                    m_refToInterface->m_modeState = STATE_UPDATED;
+                    emit m_refToInterface->modeStateChanged();
+                }
+            }
+            //else if (m_refToInterface->m_modeState == (STATE_INIT | STATE_FAILED) && element.contains("temp_osr"))
+            else if (element.contains("temp_osr"))
+            {
+                m_refToInterface->m_temp_osr = static_cast<int>(element.section('\"',11,11).toDouble());
+                qDebug()<<"SOCKET_READ: temp_osr:"<<m_refToInterface->m_temp_osr;
+
+                m_refToInterface->m_stateList[TEMP_OSR] = true;
+                if (m_refToInterface->m_stateList.indexOf(false) == -1)
+                {
+                    m_refToInterface->m_modeState = STATE_UPDATED;
+                    emit m_refToInterface->modeStateChanged();
+                }
+            }
+            else if (element.contains("error"))
+            {
+
+                //SOCKET_READ: Rejected element in data: "${\"sid\":\"1\",\"md\":\"prs_mr\",\"val\":\"8.00\"}\n"
+                //SOCKET_READ: Rejected element in data: "${\"sid\":\"1\",\"md\":\"prs_osr\",\"val\":\"8\"}\n"
+                //SOCKET_READ: Rejected element in data: "${\"sid\":\"1\",\"md\":\"temp_mr\",\"val\":\"8.00\"}\n"
+                //SOCKET_READ: Rejected element in data: "${\"sid\":\"1\",\"md\":\"temp_osr\",\"val\":\"8\"}\n"
+
+                //SOCKET_READ: Rejected element in data: "${\"sid\":\"1\",\"md\":\"prs_mr\",\"val\":\"32.00\"}\n"
+                //SOCKET_READ: Rejected element in data: "${\"sid\":\"1\",\"md\":\"prs_osr\",\"val\":\"1\"}\n"
+                //SOCKET_READ: Rejected element in data: "${\"sid\":\"1\",\"md\":\"temp_mr\",\"val\":\"32.00\"}\n"
+                //SOCKET_READ: Rejected element in data: "${\"sid\":\"1\",\"md\":\"temp_osr\",\"val\":\"1\"}\n"
+
+                // SOCKET_READ: Rejected element in data: "$d,error,message could not be parsed\n"
+                // SOCKET_READ: Rejected element in data: "$d,error,get mode failed\n"
+                qDebug()<<"GET_FAILED debug element:"<<element;
+                m_refToInterface->m_modeState = STATE_FAILED;
+                emit m_refToInterface->modeStateChanged();
+            }
+
+
+            else qDebug()<<"SOCKET_READ: Rejected element in data:"<<element;
         }
     }
     else {
-        qDebug()<<"No data to read";
+        //qDebug()<<"SOCKET_READ: No data to read";
     }
     mBufferList.clear(); // make list empty
+}
+
+
+void BtManager::sendMachine()
+{
+    if (m_refToInterface->m_modeState == STATE_REQUESTED)
+    {
+        qDebug()<<"SEND_MACHINE: entry";
+        for (int i=0; i<4; i++)
+        {
+            //qDebug()<<"print states:"<<i<<m_refToInterface->modeStates[i];
+            if ( m_refToInterface->modeStates[i] == DIRTY )
+            {
+                qDebug()<<"SEND_MACHINE: Data dirty"<<"Index:"<<i;
+                m_refToInterface->m_stateList[i] = false;
+
+
+                QByteArray tmp;
+                tmp.clear();
+
+                // send mode and value to nanohub
+                if (i == PRS_MR)
+                {
+                    tmp.setNum(m_refToInterface->m_prs_mr);
+                    sendMode(PRSMR,tmp);
+                    sentCommands.append(PRS_MR);
+                }
+                if (i == PRS_OSR)
+                {
+                    tmp.setNum(m_refToInterface->m_prs_osr);
+                    sendMode(PRSOSR,tmp);
+                    sentCommands.append(PRS_OSR);
+                }
+                if (i == TEMP_MR)
+                {
+                    tmp.setNum(m_refToInterface->m_temp_mr);
+                    sendMode(TEMPMR,tmp);
+                    sentCommands.append(TEMP_MR);
+                }
+                if (i == TEMP_OSR)
+                {
+                    tmp.setNum(m_refToInterface->m_temp_osr);
+                    sendMode(TEMPOSR,tmp);
+                    sentCommands.append(TEMP_OSR);
+                }
+                m_refToInterface->modeStates[i] = SENT;
+                sendTimer->start();
+            }
+
+            else if (m_refToInterface->modeStates[i] == (NACKED | TIMEOUTED)) {
+                qDebug()<<"SEND_MACHINE: Mode NACKED or TIMEOUTED"<<"Index:"<<i;
+                // send again
+                m_refToInterface->modeStates[i] = DIRTY;
+            }
+
+            else if ( m_refToInterface->modeStates[i] == UPDATED ) {
+                //you did it no more to send
+                //updated!
+                qDebug()<<"SEND_MACHINE: Updated"<<"Index:"<<i;
+                m_refToInterface->m_stateList[i] = true;
+
+                if (m_refToInterface->m_stateList.indexOf(false) == -1)
+                {
+                    sendTimer->stop();
+                    sentCommands.clear();
+                    errorCnt = 0;
+                    m_refToInterface->m_modeState = STATE_UPDATED;
+                    emit m_refToInterface->modeStateChanged();
+                }
+            }
+        }
+    }
+    else qDebug()<<"SEND_MACHINE: Called but incorrect state";
+}
+
+void BtManager::sendTimerExpired()
+{
+    qDebug()<<"SEND_MACHINE: Timer expired";
+    for (int i=0; i<4; i++)
+    {
+        if ( m_refToInterface->modeStates[i] == SENT)
+        {
+            m_refToInterface->modeStates[i] = TIMEOUTED;
+        }
+    }
+
+    errorCnt++;
+    if (errorCnt > 3)
+    {
+        qDebug()<<"SEND_MACHINE: ERROR sending failed after 3 timeouts";
+    }
+    else {
+        qDebug()<<"SEND_MACHINE: Timeout Error, retrying";
+        sendMachine();
+    }
+}
+
+void BtManager::modeNACK()
+{
+    if (m_refToInterface->m_modeState == STATE_REQUESTED)
+    {
+        qDebug()<<"SEND_MACHINE: NACK";
+        sendTimer->stop();
+        for (int i=0; i<4; i++)
+        {
+            if ( m_refToInterface->modeStates[i] == SENT)
+            {
+                m_refToInterface->modeStates[i] = NACKED;
+            }
+
+        }
+        errorCnt++;
+        if (errorCnt > 3)
+        {
+            // your programs main state should be SEND FAILED
+            qDebug()<<"SEND_MACHINE: ERROR sending failed";
+        }
+        else {
+            qDebug()<<"SEND_MACHINE: NACK Error, retrying";
+            sendMachine();
+        }
+    }
+}
+
+void BtManager::modeACK()
+{
+    if (m_refToInterface->m_modeState == STATE_REQUESTED)
+    {
+        qDebug()<<"SEND_MACHINE: ACK";
+        sendTimer->stop();
+
+        if (!sentCommands.empty())
+        {
+            int sentCmd = sentCommands.takeFirst();
+            if ( m_refToInterface->modeStates[sentCmd] == SENT)
+            {
+                m_refToInterface->modeStates[sentCmd] = UPDATED; //ACKED;
+            }
+            else qDebug()<<"SEND_MACHINE: ack received without waiting for it";
+        }
+        else qDebug()<<"SEND_MACHINE: Nothing to acknowledge";
+
+        // *** TEST
+        //        for (int i=0; i<sentCommands.length(); i++)
+        //        {
+        //            int sentCmd = sentCommands.at(i);
+        //            if ( m_refToInterface->modeStates[sentCmd] == SENT)
+        //            {
+        //                m_refToInterface->modeStates[sentCmd] = UPDATED; //ACKED;
+        //            }
+        //        }
+
+        // *** BALINT
+        //        for (int i=0; i<4; i++)
+        //        {
+        //            if ( m_refToInterface->modeStates[i] == SENT)
+        //            {
+        //                m_refToInterface->modeStates[i] = UPDATED; //ACKED;
+        //            }
+        //        }
+
+        sendMachine();
+    }
+
+    else if (m_refToInterface->m_modeState == STATE_INIT) {
+        qDebug()<<"SEND_MACHINE: ACK received while INIT state";
+
+    }
 }
 
 void BtManager::socketWritten(qint64 val)
@@ -299,23 +610,49 @@ void BtManager::socketWritten(qint64 val)
     //qDebug()<<"Number of Bytes written:"<<val;
 }
 
-void BtManager::setMode(const QString &sid, const QString &md, const QString &val)
+
+
+void BtManager::sendMode(const QByteArray &md, const QByteArray &val)
 {
-    QByteArray modetext = START_SIGN + "set_mode sid=" + sid.toUtf8() + ";md=" + md.toUtf8() + ";val=" + val.toUtf8() + STOP_SIGN;
-    mSocket->write(modetext);
+    QByteArray cmd = START_SIGN + "set_mode sid=" + SENSORID + ";md=" + md + ";val=" + val + STOP_SIGN;
+    mSocket->write(cmd);
     mSocket->waitForBytesWritten(-1);
-    //qDebug()<<"Mode message sent:"<<modetext;
-    //    mSocket->waitForBytesWritten(5000);
+    //qDebug()<<"Command written:"<<cmd;
+}
 
-    /* CHECK IF MODES ARE SET CORRECTLY / SENDING THE RIGHT MESSAGES */
 
+
+void BtManager::getMode(const QByteArray &md)
+{// "get_mode sid=%s;md=%s"
+    QByteArray cmd = START_SIGN + "get_mode sid=" + this->SENSORID + ";md=" + md + STOP_SIGN;
+    //qDebug()<<"Command sent:"<<cmd;
+    mSocket->write(cmd);
+    mSocket->waitForBytesWritten(-1);
+    mSocket->waitForReadyRead(-1);
 }
 
 void BtManager::sendMessage(const QString &message)
 {
-    QByteArray text = START_SIGN + message.toUtf8() + STOP_SIGN;
-    mSocket->write(text);
+    QByteArray cmd = START_SIGN + message.toUtf8() + STOP_SIGN;
+    mSocket->write(cmd);
     //qDebug()<<"Message sent:"<<text;
+}
+
+void BtManager::start()
+{
+    // ADD START_TIMER HERE
+
+
+    //QThread::msleep(500);
+    this->sendMessage(START);
+    mSocket->waitForBytesWritten(-1);
+    mSocket->waitForReadyRead(-1);
+    qDebug()<<"Start message sent, asking for current modes";
+
+    getMode(PRSMR);
+    getMode(PRSOSR);
+    getMode(TEMPMR);
+    getMode(TEMPOSR);
 }
 
 void BtManager::connectSocketDevice()
@@ -344,6 +681,7 @@ void BtManager::connectSocketService()
 
 void BtManager::onSocketConnected()
 {
+
     qDebug()<<"Socket connected";
     qDebug() << "Local:" << mSocket->localName()
              << "Address:" << mSocket->localAddress().toString()
@@ -353,22 +691,14 @@ void BtManager::onSocketConnected()
              << "Port:" << mSocket->peerPort();
     if (mSocket->writeChannelCount() == 1)
     {
-        this->sendMessage(STOP);
-        mSocket->waitForBytesWritten(-1);
-        qDebug()<<"Stop message sent";
-        //        this->sendMessage(INFO);
-        //        mSocket->waitForBytesWritten(-1);
-        //        this->sendMessage(HELLO);
-        //        mSocket->waitForBytesWritten(-1);
-        //        this->sendMessage(HELLO);
-        //        mSocket->waitForBytesWritten(-1);
-        this->sendMessage(START);
-        mSocket->waitForBytesWritten(-1);
-        qDebug()<<"Start message sent";
+        m_refToInterface->m_modeState = STATE_INIT;
+        emit m_refToInterface->modeStateChanged();
+        //this->start();
+
 
         // ****************************************************
         //                  TEST for changing modes
-        bool testModes = true;
+        bool testModes = false;
         if (testModes)
         {
             modeTimeout = 10000;
@@ -377,8 +707,6 @@ void BtManager::onSocketConnected()
             qDebug()<<"timer started";
         }
         // ****************************************************
-
-        //mSocket->waitForBytesWritten(5000);
     }
     else {
         qDebug()<<"Multiple number of channels. Implementation needed.";
@@ -386,13 +714,12 @@ void BtManager::onSocketConnected()
 
 }
 
+
+
 void BtManager::onSocketDisconnected()
 {
     qDebug()<<"Socket disconnected";
-
-
-
-
+    m_refToInterface->m_modeState = STATE_UNCONNECTED;
 }
 
 void BtManager::onSocketError(QBluetoothSocket::SocketError error)
@@ -406,6 +733,7 @@ void BtManager::onSocketStateChanged(QBluetoothSocket::SocketState state)
 }
 
 void BtManager::onPairingDisplayPinCode(QBluetoothAddress address,QString pin)
+// Pair NanoHub
 {   // only called if there are issues with requestPairing()
     // display the pin to the user
     Q_UNUSED(address);
@@ -449,6 +777,18 @@ void BtManager::onPairingFinished(QBluetoothAddress address,QBluetoothLocalDevic
     }
 }
 
+void BtManager::startDiscovery()
+{
+    if (!mDeviceDiscoveryAgent->isActive())
+    {
+        qDebug()<<"Device discovery started";
+        //onHostModeStateChanged(mLocalDevice->hostMode());
+        mDeviceDiscoveryAgent->start(QBluetoothDeviceDiscoveryAgent::ClassicMethod);
+    }
+}
+
+
+
 void BtManager::onHostModeStateChanged(QBluetoothLocalDevice::HostMode mode)
 {
     qDebug()<<"Host mode changed to:"<<mode;
@@ -477,9 +817,12 @@ void BtManager::onDeviceScanError(QBluetoothDeviceDiscoveryAgent::Error error)
 
 void BtManager::onDeviceDiscovered(const QBluetoothDeviceInfo &dInfo)
 {
+    bool ifxOnly = true;
+
     qDebug() << "Found new device:" << dInfo.name() << "Address:" << dInfo.address().toString();
-    if (dInfo.name().contains("IFX_NANO-25BB"))
+    if (dInfo.name().contains("IFX_NANO-25BB") && ifxOnly)
     {
+
         // Stop device discovery (remove later)
         mDeviceDiscoveryAgent->stop();
         // Assign received QBluetoothDeviceInfo
@@ -487,6 +830,7 @@ void BtManager::onDeviceDiscovered(const QBluetoothDeviceInfo &dInfo)
 
         // Pair NanoHub
         QBluetoothLocalDevice::Pairing pstatus = mLocalDevice->pairingStatus(mDeviceInfo.address());
+        qDebug()<<"Initial pairing status:"<<pstatus;
         if (pstatus == QBluetoothLocalDevice::Unpaired)
         {
             this->pairDevice();
@@ -494,5 +838,15 @@ void BtManager::onDeviceDiscovered(const QBluetoothDeviceInfo &dInfo)
         else {
             mLocalDevice->requestPairing(mDeviceInfo.address(),QBluetoothLocalDevice::Unpaired);
         }
+    }
+    else {
+        //m_devices.append(new QBluetoothDeviceInfo(dInfo));
+
+        //m_refToInterface->addDeviceToList(dInfo);
+        mDeviceInfo = dInfo;
+
+        emit deviceFound(mDeviceInfo.name(), mDeviceInfo.address().toString());
+        //m_devices.append(new DeviceInfo(dInfo));
+        //emit m_refToInterface->devicesChanged();
     }
 }

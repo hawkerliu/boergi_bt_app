@@ -1,5 +1,5 @@
 import QtQuick 2.9
-import QtQuick.Controls 2.2
+import QtQuick.Controls 2.3
 
 Slider {
     id: confSlider
@@ -14,6 +14,7 @@ Slider {
 
     property int iterator: 0
     Keys.onLeftPressed: {
+        // dividieren durch 2
         if (confSlider.value == 2) confSlider.value = 1
         if (confSlider.value == 4) confSlider.value = 2
         if (confSlider.value == 8) confSlider.value = 4
