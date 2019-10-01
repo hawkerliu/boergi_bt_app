@@ -1,11 +1,11 @@
 <RCC>
     <qresource prefix="/">
         <file>main.qml</file>
+        <file>bt.png</file>
         <file>DataView.qml</file>
         <file>DeviceScan.qml</file>
         <file>ModeConfig.qml</file>
         <file>pics/Infineon-Logo.png</file>
-	<file>pics/Infineon-Logo_white.png</file>
         <file>GraphSettings.qml</file>
         <file>pics/solid.png</file>
         <file>pics/dashdot.png</file>

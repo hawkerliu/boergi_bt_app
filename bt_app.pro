@@ -1,10 +1,16 @@
-QT += quick
-QT += qml
 QT += widgets
 QT += core gui
 QT += bluetooth
+
+QT += qml
 QT += charts
+QT += quick
+QT += quickcontrols2
+
 CONFIG += c++11
+
+TARGET = bt_app
+TEMPLATE = app
 
 # The following define makes your compiler emit warnings if you use
 # any feature of Qt which as been marked deprecated (the exact warnings
@@ -18,12 +24,16 @@ DEFINES += QT_DEPRECATED_WARNINGS
 #DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
 
 SOURCES += \
+    datamodel.cpp \
     deviceinfo.cpp \
         main.cpp \
     btmanager.cpp \
+    modeconfig.cpp \
     threadqmlinterface.cpp
 
 RESOURCES += qml.qrc
+
+OTHER_FILES += pics/Infineon-Logo_white.png
 
 # Additional import path used to resolve QML modules in Qt Creator's code model
 QML_IMPORT_PATH =
@@ -38,7 +48,9 @@ else: unix:!android: target.path = /opt/$${TARGET}/bin
 
 HEADERS += \
     btmanager.h \
+    datamodel.h \
     deviceinfo.h \
+    modeconfig.h \
     threadqmlinterface.h \
     btthread.h
 

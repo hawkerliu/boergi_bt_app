@@ -1,5 +1,11 @@
-import QtQuick 2.9
-import QtQuick.Controls 2.3
+import QtQuick 2.12
+import QtQuick.Controls 2.5
+
+import QtQuick.Controls.Material 2.12
+
+// balint
+//import QtQuick 2.9
+//import QtQuick.Controls 2.3
 
 Slider {
     id: confSlider
@@ -11,6 +17,11 @@ Slider {
     value: 8
     from: 1
     to: 128
+
+    Material.theme: globalTheme
+    Material.accent: globalAccent
+
+
 
     property int iterator: 0
     Keys.onLeftPressed: {
